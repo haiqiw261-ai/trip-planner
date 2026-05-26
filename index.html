@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>旅图 AI — 智能行程规划</title>
+<meta name="description" content="AI 驱动的行程规划助手，一键生成互动旅行地图">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { sf: ['-apple-system','BlinkMacSystemFont','SF Pro Text','SF Pro Display','Helvetica Neue','Arial','sans-serif'] },
+      colors: {
+        apple: {
+          bg: '#f5f5f7',
+          card: '#ffffff',
+          text: '#1d1d1f',
+          secondary: '#86868b',
+          tertiary: '#aeaeb2',
+          accent: '#0071e3',
+          red: '#ff3b30',
+          orange: '#ff9500',
+          green: '#34c759',
+          blue: '#007aff',
+          purple: '#af52de',
+          pink: '#ff2d55',
+          sep: 'rgba(60,60,67,.12)'
+        }
+      }
+    }
+  }
+}
+</script>
+<style>
+:root {
+  --safe-top: env(safe-area-inset-top,0px);
+  --safe-bottom: env(safe-area-inset-bottom,0px);
+}
+* { -webkit-tap-highlight-color: transparent; }
+body {
+  font-family: -apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue","Arial",sans-serif;
+  background: #f5f5f7; color: #1d1d1f; -webkit-font-smoothing: antialiased;
+  line-height: 1.47059; letter-spacing: -0.022em;
+}
+
+/* Frosted glass */
+.glass {
+  background: rgba(255,255,255,.85);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+}
+.glass-strong {
+  background: rgba(255,255,255,.92);
+  -webkit-backdrop-filter: saturate(180%) blur(30px);
+  backdrop-filter: saturate(180%) blur(30px);
+}
+
+/* Map */
+#map { width:100%; height:40vh; min-height:280px; position:sticky; top:0; z-index:100; }
+
+/* Tabs — frosted */
+.tabs-bar {
+  position:sticky; top:40vh; z-index:99;
+  border-bottom: .5px solid rgba(60,60,67,.12);
+}
+
+/* Scrollbar hide */
+.no-scrollbar::-webkit-scrollbar { display:none; }
+.no-scrollbar { scrollbar-width:none; }
+
+/* Timeline */
+.timeline { position:relative; padding-left:28px; }
+.timeline::before {
+  content:''; position:absolute; left:9px; top:22px; bottom:22px;
+  width:1.5px; background:rgba(60,60,67,.12);
+}
+.tl-dot {
+  position:absolute; left:-22px; top:18px;
+  width:12px; height:12px; border-radius:50%; z-index:1;
+  box-shadow:0 0 0 3px #f5f5f7;
+}
+
+/* Card */
+.poi-card { cursor:pointer; transition: box-shadow .2s ease; }
+.poi-card:active { box-shadow:0 8px 30px rgba(0,0,0,.12); }
+
+/* Badge */
+.badge-sm {
+  display:inline-flex; align-items:center; font-size:10px; font-weight:700;
+  padding:2px 6px; border-radius:4px; letter-spacing:.01em;
+}
+
+/* Payment chips */
+.pay-chip { font-size:10px; padding:2px 7px; border-radius:4px; font-weight:600; }
+
+/* Buttons */
+.btn-sm {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:7px 12px; border-radius:8px;
+  font-size:12px; font-weight:600; border:none; cursor:pointer;
+  text-decoration:none !important; transition:filter .15s;
+}
+.btn-sm:active { filter:brightness(.9); }
+
+/* Action Sheet */
+.as-overlay {
+  position:fixed; inset:0; z-index:9999;
+  background:rgba(0,0,0,.35); backdrop-filter:blur(2px);
+  display:flex; align-items:flex-end; justify-content:center;
+  opacity:0; pointer-events:none; transition:opacity .25s;
+}
+.as-overlay.show { opacity:1; pointer-events:auto; }
+.as-sheet {
+  width:100%; max-width:420px; padding:0 8px 34px;
+  transform:translateY(100%); transition:transform .3s cubic-bezier(.22,1,.36,1);
+}
+.as-overlay.show .as-sheet { transform:translateY(0); }
+.as-group {
+  background:rgba(255,255,255,.88); backdrop-filter:blur(20px);
+  border-radius:14px; overflow:hidden; margin-bottom:8px;
+}
+.as-item {
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  padding:16px; font-size:17px; color:#007aff; font-weight:500;
+  border:none; background:none; width:100%; cursor:pointer;
+}
+.as-item+.as-item { border-top:.5px solid rgba(0,0,0,.12); }
+.as-item:active { background:rgba(0,0,0,.06); }
+
+/* Detail expand */
+.detail-block { font-size:13px; color:#86868b; line-height:1.6; margin-top:10px; padding-top:10px; border-top:.5px solid rgba(60,60,67,.12); }
+.detail-block.hidden { display:none; }
+
+/* Weather alert */
+.weather-alert {
+  border-left:3px solid #ff9500;
+  background:rgba(255,149,0,.06);
+}
+
+/* Wizard */
+.wizard-step { display:none; }
+.wizard-step.active { display:block; }
+
+/* Loading spinner */
+@keyframes spin { to { transform:rotate(360deg); } }
+.spinner { animation:spin .8s linear infinite; }
+
+/* Leaflet overrides */
+.leaflet-popup-content-wrapper {
+  border-radius:12px !important; box-shadow:0 8px 30px rgba(0,0,0,.12) !important;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif !important;
+}
+.leaflet-popup-content { font-size:14px !important; margin:12px 14px !important; }
+.leaflet-popup-content a { color:#0071e3 !important; }
+.leaflet-control-zoom a {
+  width:34px !important; height:34px !important; line-height:34px !important;
+  font-size:16px !important; border-radius:10px !important;
+  background:rgba(255,255,255,.85) !important;
+  -webkit-backdrop-filter:blur(10px) !important; backdrop-filter:blur(10px) !important;
+  border:.5px solid rgba(60,60,67,.12) !important; color:#1d1d1f !important;
+}
+.leaflet-control-zoom { border-radius:12px !important; overflow:hidden; box-shadow:0 4px 14px rgba(0,0,0,.08) !important; border:none !important; }
+.leaflet-control-attribution { font-size:9px !important; opacity:.5; }
+
+/* Modal */
+.modal-overlay {
+  position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.4);
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; pointer-events:none; transition:opacity .25s;
+}
+.modal-overlay.show { opacity:1; pointer-events:auto; }
+.modal {
+  background:#fff; border-radius:20px; padding:24px;
+  width:90%; max-width:400px; max-height:80vh; overflow-y:auto;
+  box-shadow:0 8px 40px rgba(0,0,0,.2);
+  transform:translateY(20px); transition:transform .3s cubic-bezier(.22,1,.36,1);
+}
+.modal-overlay.show .modal { transform:translateY(0); }
+
+/* Pulse animation for AI thinking */
+@keyframes pulse-dot {
+  0%,100% { opacity:.4; }
+  50% { opacity:1; }
+}
+.pulse-dot { animation:pulse-dot 1.4s ease-in-out infinite; }
+.pulse-dot:nth-child(2) { animation-delay:.2s; }
+.pulse-dot:nth-child(3) { animation-delay:.4s; }
+</style>
+</head>
+<body class="font-sf">
+
+<!-- ═══════════════ AI Wizard Modal ═══════════════ -->
+<div class="modal-overlay" id="wizardModal">
+  <div class="modal">
+    <div class="flex items-center justify-between mb-5">
+      <h3 class="text-xl font-bold tracking-[-0.02em]">AI 行程规划</h3>
+      <button onclick="closeWizard()" class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition">✕</button>
+    </div>
+
+    <!-- Step 1: Basic Info -->
+    <div class="wizard-step active" id="wiz-step-1">
+      <p class="text-sm text-gray-500 mb-4">告诉我你的出行计划，AI 帮你排行程</p>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">目的地</label>
+          <input id="wiz-dest" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" placeholder="例如：东京">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">出发日期</label>
+            <input id="wiz-start" type="date" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition">
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">回程日期</label>
+            <input id="wiz-end" type="date" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">酒店 / 住宿区域</label>
+          <input id="wiz-hotel" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition" placeholder="例如：新宿华盛顿酒店">
+        </div>
+        <!-- Flight info (collapsible) -->
+        <div class="border border-gray-200 rounded-xl overflow-hidden">
+          <button type="button" onclick="this.nextElementSibling.classList.toggle('hidden');this.querySelector('svg').classList.toggle('rotate-180')" class="w-full flex items-center justify-between px-3 py-2.5 text-sm text-gray-500 hover:bg-gray-50 transition">
+            <span>✈️ 航班信息（选填）</span>
+            <svg class="w-4 h-4 text-gray-400 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="hidden px-3 pb-3 space-y-2.5 bg-gray-50/50">
+            <div class="grid grid-cols-2 gap-2.5">
+              <div>
+                <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">到达航班号</label>
+                <input id="wiz-flight-in-no" class="w-full mt-0.5 px-2.5 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition" placeholder="例如：CA925">
+              </div>
+              <div>
+                <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">到达时间</label>
+                <input id="wiz-flight-in-time" type="time" class="w-full mt-0.5 px-2.5 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition">
+              </div>
+            </div>
+            <div>
+              <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">到达机场 / 航站楼</label>
+              <input id="wiz-flight-in-airport" class="w-full mt-0.5 px-2.5 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition" placeholder="例如：成田机场 T1">
+            </div>
+            <div class="border-t border-gray-200 pt-2.5 mt-2.5">
+              <div class="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">回程航班号</label>
+                  <input id="wiz-flight-out-no" class="w-full mt-0.5 px-2.5 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition" placeholder="例如：CA926">
+                </div>
+                <div>
+                  <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">回程时间</label>
+                  <input id="wiz-flight-out-time" type="time" class="w-full mt-0.5 px-2.5 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition">
+                </div>
+              </div>
+              <div class="mt-2.5">
+                <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">回程机场 / 航站楼</label>
+                <input id="wiz-flight-out-airport" class="w-full mt-0.5 px-2.5 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition" placeholder="例如：成田机场 T1">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">想去的地方</label>
+          <textarea id="wiz-wishlist" rows="3" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition" placeholder="银座、浅草寺、涩谷SKY、筑地市场、秋叶原…"></textarea>
+        </div>
+      </div>
+      <button onclick="wizardNext(2)" class="w-full mt-5 py-3 bg-[#0071e3] text-white rounded-xl font-semibold text-sm hover:bg-[#0077ed] transition active:scale-[.98]">
+        下一步 →
+      </button>
+    </div>
+
+    <!-- Step 2: Preferences -->
+    <div class="wizard-step" id="wiz-step-2">
+      <p class="text-sm text-gray-500 mb-4">偏好设置，让行程更贴合你</p>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">人数 & 节奏</label>
+          <div class="grid grid-cols-3 gap-2 mt-1">
+            <button class="pref-btn px-3 py-2 rounded-xl border border-gray-200 text-xs font-medium hover:border-blue-300 transition" data-val="两人，能走">👫 两人，能走</button>
+            <button class="pref-btn px-3 py-2 rounded-xl border border-gray-200 text-xs font-medium hover:border-blue-300 transition" data-val="带老人/小孩">👨‍👩‍👧 带家人</button>
+            <button class="pref-btn px-3 py-2 rounded-xl border border-gray-200 text-xs font-medium hover:border-blue-300 transition" data-val="一个人">🧍 一个人</button>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">喜好标签</label>
+          <div class="flex flex-wrap gap-2 mt-1">
+            <button class="tag-btn px-3 py-1.5 rounded-full border border-gray-200 text-xs hover:border-blue-300 transition" data-val="咖啡">☕ 咖啡</button>
+            <button class="tag-btn px-3 py-1.5 rounded-full border border-gray-200 text-xs hover:border-blue-300 transition" data-val="购物">🛍️ 购物</button>
+            <button class="tag-btn px-3 py-1.5 rounded-full border border-gray-200 text-xs hover:border-blue-300 transition" data-val="甜点">🍰 甜点</button>
+            <button class="tag-btn px-3 py-1.5 rounded-full border border-gray-200 text-xs hover:border-blue-300 transition" data-val="酒吧">🍸 酒吧</button>
+            <button class="tag-btn px-3 py-1.5 rounded-full border border-gray-200 text-xs hover:border-blue-300 transition" data-val="夜景">🌃 夜景</button>
+            <button class="tag-btn px-3 py-1.5 rounded-full border border-gray-200 text-xs hover:border-blue-300 transition" data-val="二次元">🎮 二次元</button>
+            <button class="tag-btn px-3 py-1.5 rounded-full border border-gray-200 text-xs hover:border-blue-300 transition" data-val="拍照">📸 拍照</button>
+            <button class="tag-btn px-3 py-1.5 rounded-full border border-gray-200 text-xs hover:border-blue-300 transition" data-val="温泉">♨️ 温泉</button>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">餐饮预算（人均）</label>
+          <select id="wiz-budget" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition">
+            <option value="">不限</option>
+            <option value="经济">经济 ¥1,000-3,000</option>
+            <option value="中等">中等 ¥3,000-8,000</option>
+            <option value="高端">高端 ¥8,000-20,000</option>
+            <option value="顶级">顶级 ¥20,000+</option>
+          </select>
+        </div>
+      </div>
+      <div class="flex gap-3 mt-5">
+        <button onclick="wizardNext(1)" class="flex-1 py-3 bg-gray-100 rounded-xl font-semibold text-sm hover:bg-gray-200 transition active:scale-[.98]">← 上一步</button>
+        <button onclick="wizardNext(3)" class="flex-1 py-3 bg-[#0071e3] text-white rounded-xl font-semibold text-sm hover:bg-[#0077ed] transition active:scale-[.98]">下一步 →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: API Key (for AI) -->
+    <div class="wizard-step" id="wiz-step-3">
+      <p class="text-sm text-gray-500 mb-4">连接 AI 需要 DeepSeek API Key（可选，不填则加载示例行程）</p>
+      <div>
+        <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">DeepSeek API Key</label>
+        <input id="wiz-apikey" type="password" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition" placeholder="sk-…">
+        <p class="text-[11px] text-gray-400 mt-1.5">仅保存在浏览器本地，不会上传到任何服务器</p>
+      </div>
+      <div class="flex gap-3 mt-5">
+        <button onclick="wizardNext(2)" class="flex-1 py-3 bg-gray-100 rounded-xl font-semibold text-sm hover:bg-gray-200 transition active:scale-[.98]">← 上一步</button>
+        <button onclick="runAIPlan()" class="flex-1 py-3 bg-[#0071e3] text-white rounded-xl font-semibold text-sm hover:bg-[#0077ed] transition active:scale-[.98]" id="wiz-submit-btn">
+          ✨ 生成行程
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading State -->
+    <div class="wizard-step text-center py-8" id="wiz-step-loading">
+      <div class="inline-flex items-center gap-1.5 mb-3">
+        <div class="w-2.5 h-2.5 bg-[#0071e3] rounded-full pulse-dot"></div>
+        <div class="w-2.5 h-2.5 bg-[#0071e3] rounded-full pulse-dot"></div>
+        <div class="w-2.5 h-2.5 bg-[#0071e3] rounded-full pulse-dot"></div>
+      </div>
+      <p class="text-sm text-gray-500" id="wiz-loading-text">AI 正在规划你的行程…</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ Settings Modal ═══════════════ -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <div class="flex items-center justify-between mb-5">
+      <h3 class="text-xl font-bold tracking-[-0.02em]">⚙️ 设置</h3>
+      <button onclick="closeSettings()" class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition">✕</button>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">DeepSeek API Key</label>
+        <input id="settings-apikey" type="password" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition" placeholder="sk-…">
+      </div>
+      <div>
+        <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">AI 模型</label>
+        <select id="settings-model" class="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-blue-400 transition">
+          <option value="deepseek-v4-pro">DeepSeek V4 Pro（推荐）</option>
+          <option value="deepseek-chat">DeepSeek Chat</option>
+          <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+        </select>
+      </div>
+      <button onclick="saveSettings()" class="w-full mt-3 py-3 bg-[#0071e3] text-white rounded-xl font-semibold text-sm hover:bg-[#0077ed] transition active:scale-[.98]">
+        保存设置
+      </button>
+      <button onclick="resetTrip()" class="w-full py-2.5 text-sm text-red-500 font-medium hover:bg-red-50 rounded-xl transition active:scale-[.98]">
+        恢复默认示例行程
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ MAIN APP ═══════════════ -->
+<div id="map"></div>
+
+<div class="tabs-bar glass" id="tabsBar">
+  <div class="flex items-center justify-between px-3">
+    <div class="flex gap-1.5 py-2.5 overflow-x-auto no-scrollbar flex-1" id="tabsContainer"></div>
+    <button onclick="openWizard()" class="flex-shrink-0 w-8 h-8 rounded-full bg-[#0071e3] text-white flex items-center justify-center text-sm font-bold hover:bg-[#0077ed] transition active:scale-90 ml-2" title="AI 规划">✨</button>
+    <button onclick="openSettings()" class="flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm hover:bg-gray-300 transition active:scale-90 ml-1" title="设置">⚙️</button>
+  </div>
+</div>
+
+<div class="max-w-2xl mx-auto px-4 pb-8" id="contentArea" style="padding-bottom:calc(24px + var(--safe-bottom))"></div>
+
+<!-- ═══════════════ Action Sheet ═══════════════ -->
+<div class="as-overlay" id="asOverlay">
+  <div class="as-sheet">
+    <div class="as-group" id="asOpts"></div>
+    <div class="as-group"><button class="as-item font-semibold text-gray-500" onclick="closeAS()">取消</button></div>
+  </div>
+</div>
+
+<!-- ═══════════════ SCRIPTS ═══════════════ -->
+<script>
+// ╔══════════════════════════════════════════════════════════╗
+// ║  DATA — Demo Tokyo 4-Day Itinerary                      ║
+// ╚══════════════════════════════════════════════════════════╝
+
+const DEFAULT_HOTEL = {
+  name: 'Mitsui Garden Hotel Jingugaien Tokyo Premier',
+  lat: 35.6785, lng: 139.7150,
+  address: '东京都新宿区霞丘町11-3',
+  desc: '毗邻国立竞技场，地铁2分钟，夜景可眺望新宿高楼群'
+};
+
+const DEFAULT_DAYS = [
+  { id:0, label:'总览', color:'#0071e3', locations:[] },
+  {
+    id:1, label:'D1', date:'6月14日 周六', title:'新宿 · 降落第一夜',
+    color:'#ff9500', region:'新宿',
+    weatherNote: '晴转多云 26°/19°，晚间微风，适合散步',
+    locations: [
+      { name:'Mitsui Garden Hotel', lat:35.6785, lng:139.7150, type:'hotel', time:'15:00', desc:'入住 · 新宿区霞丘町，毗邻国立竞技场', budget:'¥22,000/晚', detail:'提前在线check-in已办妥。前台24小时，行李可寄存。大浴场开放至凌晨1:00。\n\n交通：都营大江户线·国立竞技场站 A2出口步行2分钟', pay:{card:1,suica:1}, reserve:'https://www.gardenhotels.co.jp/' },
+      { name:'NEWoMan 新宿', lat:35.6882, lng:139.7002, type:'spot', time:'17:00', desc:'新宿站直通精选商场，咖啡与杂货集合', budget:'¥2,000-5,000', detail:'JR新宿站南口直通，无需出站。\n2F Blue Bottle Coffee 可买一杯坐下看人流。\n适合落地第一站：不累、有空调、有厕所有Wi-Fi。', pay:{cash:1,card:1,suica:1}, xhs:'https://www.xiaohongshu.com/search_result?keyword=NEWoMan新宿逛街', gmap:'NEWoMan+Shinjuku' },
+      { name:'KABEAT 新宿', lat:35.6895, lng:139.7018, type:'food', time:'18:30', desc:'落地第一餐 · 创意和食，窑烤蔬菜与自然派红酒', budget:'¥5,000-7,000', detail:'落地型推荐：出餐稳、不用排队、离酒店近。\n窑烤当季蔬菜是招牌。吧台位可看开放厨房。\n建议提前电话确认当晚空位。', pay:{cash:1,card:1,suica:1}, xhs:'https://www.xiaohongshu.com/search_result?keyword=KABEAT新宿晚餐', xhsKeyword:'KABEAT 新宿 晚餐', dianpingKeyword:'KABEAT 新宿', reserve:'https://tabelog.com/tokyo/A1304/A130401/13217643/' },
+      { name:'Bar Benfiddich', lat:35.6908, lng:139.7023, type:'drink', time:'20:30', desc:'世界Top50酒吧，草本调酒像在喝森林', budget:'¥2,500-4,000', detail:'新宿西口步行5分钟。无酒单，告诉调酒师你想要的感觉。\n周末建议21点前到，或做好排队准备。\n备选：Bar High Five 银座（D3晚上顺路）。', pay:{cash:1,card:1,suica:0.5}, xhsKeyword:'Benfiddich 酒吧 新宿' }
+    ]
+  },
+  {
+    id:2, label:'D2', date:'6月15日 周日', title:'浅草 · 下町文化日',
+    color:'#ff3b30', region:'浅草/上野',
+    weatherNote: '晴 28°/21°，周日浅草寺人较多，建议9点前到',
+    locations: [
+      { name:'浅草寺', lat:35.7148, lng:139.7967, type:'spot', time:'08:30', desc:'东京最古老寺庙，雷门与仲见世通', budget:'免费', detail:'周日建议8:30前到，避开旅行团高峰。\n雷门→仲见世通→本堂参拜→五重塔，标准动线约45分钟。\n抽到凶签记得系在寺内。', pay:{cash:1,suica:1}, gmap:'Sensoji+Temple+Tokyo' },
+      { name:'寿寿喜园 浅草', lat:35.7120, lng:139.7958, type:'drink', time:'10:00', desc:'世界最浓抹茶冰淇淋 Level 7，拍照神店', budget:'¥500-1,200', detail:'浅草寺步行3分钟。Level 7 抹茶真的很浓，建议选 Level 4-5 口感最佳。\n周末排队约15-20分钟。\n小红书爆款打卡店，适合拍照但出品确实能打。', pay:{cash:1}, xhs:'https://www.xiaohongshu.com/search_result?keyword=寿寿喜园浅草抹茶冰淇淋' },
+      { name:'今半 浅草', lat:35.7135, lng:139.7950, type:'food', time:'11:30', desc:'明治28年寿喜烧老铺，午市套餐是性价比之选', budget:'¥4,000-8,000（午市）', detail:'周日午市 11:30 到可排第一轮。\n午市套餐 ¥4,000-8,000 vs 晚市 ¥15,000+，强烈推荐中午来。\n大众点评 4.5★ 东京寿喜烧排名前3，需要本人到店取号。', pay:{cash:1,card:1}, dianpingKeyword:'今半 浅草 寿喜烧', xhsKeyword:'今半别馆 浅草 午市', reserve:'https://tabelog.com/tokyo/A1311/A131102/13008392/' },
+      { name:'上野公园', lat:35.7146, lng:139.7731, type:'spot', time:'14:00', desc:'文化之森：美术馆+动物园+不忍池，随选随走', budget:'免费（美术馆另算）', detail:'东京国立博物馆 ¥1,000（周日开放至17:00）。\n不想看展可绕不忍池散步，池畔莲花6月正好。\n备选：アメ横商店街逛街吃小吃。', pay:{cash:0.5,card:1,suica:1}, gmap:'Ueno+Park+Tokyo' },
+      { name:'鶯谷園', lat:35.7210, lng:139.7775, type:'food', time:'18:00', desc:'本地人烧肉名店，厚切牛舌和ハラミ必点', budget:'¥5,000-7,000', detail:'上野/鶯谷区域烧肉代表。必须提前预约！\n厚切牛舌（特上タン塩）是招牌，晚市经常卖完。\n大众点评 4.4★ "东京烧肉性价比之王"。', pay:{cash:1,card:1,suica:1}, dianpingKeyword:'鶯谷園 烧肉', xhsKeyword:'鶯谷園 烧肉 预约', reserve:'https://tabelog.com/tokyo/A1311/A131101/13023040/' },
+      { name:'カヤバ珈琲', lat:35.7125, lng:139.7720, type:'drink', time:'—', desc:'备选：昭和复古喫茶店，鸡蛋三明治是传奇', budget:'¥800-1,500', detail:'上野/根津区域，昭和13年创立的老铺喫茶。\n鸡蛋三明治+深烘手冲是经典搭配。\n备选理由：如果烧肉吃太饱不需要，改成D3下午茶。', pay:{cash:1} }
+    ]
+  },
+  {
+    id:3, label:'D3', date:'6月16日 周一', title:'银座 · 现代东京',
+    color:'#007aff', region:'银座/六本木',
+    weatherNote: '多云转阴 25°/20°，下午可能有阵雨，建议室内为主',
+    locations: [
+      { name:'筑地市场 场外', lat:35.6655, lng:139.7705, type:'food', time:'08:00', desc:'东京厨房 · 海鲜丼、玉子烧、烤海鲜串', budget:'¥2,000-4,000', detail:'周一场外市场大部分店营业。\n8点前人少，9点后旅行团涌入。\n推荐：うまい鮨勘 海鲜丼 / 丸武 玉子烧 / さかえや 烤蟹脚。\n注意：场内市场已搬至丰洲，这里是场外商店街。', pay:{cash:1,suica:0.5}, xhsKeyword:'筑地市场场外早餐推荐', gmap:'Tsukiji+Outer+Market' },
+      { name:'银座 伊东屋', lat:35.6722, lng:139.7701, type:'spot', time:'10:30', desc:'百年文具殿堂 G.Itoya，12层楼的手帐与文具天国', budget:'¥1,000-5,000', detail:'银座中央通，红色回形针标志建筑。\nB1-6F 文具手帐，7F 咖啡厅可歇脚，8F 和纸手工。\n周一上午人少，适合慢慢逛。', pay:{cash:1,card:1,suica:1} },
+      { name:'銀座 久兵衛', lat:35.6728, lng:139.7690, type:'food', time:'12:00', desc:'银座寿司名店，午市握寿司套餐性价比极高', budget:'¥8,000-15,000（午市）', detail:'务必提前预约！官网/电话均可（有英文对应）。\n吧台位直接看师傅握寿司，比包间有体验感。\n大众点评 4.6★ 东京寿司前5，小红书"银座寿司最佳入门店"。', pay:{cash:1,card:1}, dianpingKeyword:'久兵卫 银座 寿司', xhsKeyword:'久兵卫 银座 午市 预约', reserve:'https://tabelog.com/tokyo/A1301/A130101/13002220/' },
+      { name:'六本木 Hills 展望台', lat:35.6604, lng:139.7292, type:'spot', time:'16:00', desc:'东京城市全景 + 森美术馆套票，黄昏到入夜最佳', budget:'¥2,000（展望台+美术馆）', detail:'建议16:00到，先看美术馆，17:30左右上屋顶SKY DECK。\n从白昼→黄昏→夜景三阶段一次收集。\n屋顶风大，带件薄外套。备选：SHIBUYA SKY（需提前3周预约）。', pay:{cash:1,card:1,suica:1}, reserve:'https://art-view.roppongihills.com/', gmap:'Roppongi+Hills+Tokyo+City+View' },
+      { name:'銀座 篝', lat:35.6735, lng:139.7685, type:'food', time:'19:00', desc:'米其林推荐鸡白汤拉面，浓到挂壁的黄金汤底', budget:'¥1,200-1,800', detail:'银座小巷里的拉面名店，排队约20-30分钟。\n鸡白汤SOBA是招牌，汤底熬8小时以上。\n晚餐不想太正式时的理想选择。\n备选：AFURI 柚子盐拉面（六本木店，看完展望台顺路）。', pay:{cash:1}, xhsKeyword:'银座篝鸡白汤拉面排队', dianpingKeyword:'篝 银座 拉面' },
+      { name:'Star Bar Ginza', lat:35.6720, lng:139.7682, type:'drink', time:'—', desc:'备选：银座老牌威士忌吧，安静收尾', budget:'¥3,000-5,000', detail:'地下1层，只有10个座位，适合不想吵闹的夜晚。\n日威品类齐全，bartender英语可沟通。\n备选理由：今天已经两个正餐，如果累了就跳过。', pay:{cash:1,card:1} }
+    ]
+  },
+  {
+    id:4, label:'D4', date:'6月17日 周二', title:'原宿 · 收尾上午',
+    color:'#34c759', region:'原宿/表参道',
+    weatherNote: '晴 27°/20°，适合户外逛街，注意防晒',
+    locations: [
+      { name:'明治神宫', lat:35.6764, lng:139.6993, type:'spot', time:'08:30', desc:'都心绿洲，清晨参道散步绝佳', budget:'免费', detail:'最后一天选择不跑远的点。\n清晨参道几乎无人，光线穿过树冠很美。\n参拜+南参道散步约45分钟，9:30前可结束。', pay:{cash:1,suica:1}, gmap:'Meiji+Jingu+Shrine+Tokyo' },
+      { name:'Fuglen 代々木', lat:35.6805, lng:139.6975, type:'drink', time:'09:30', desc:'挪威传奇咖啡东京1号店，60年代复古家具', budget:'¥600-1,200', detail:'明治神宫步行8分钟。\n早上人少，可独占窗边沙发。\n推荐：手冲肯尼亚AA + 肉桂卷。\n小红书"东京最美咖啡馆"常驻选手。', pay:{cash:1,suica:1}, xhsKeyword:'Fuglen东京代代木咖啡' },
+      { name:'Afuri 原宿', lat:35.6698, lng:139.7025, type:'food', time:'11:00', desc:'柚子盐拉面，清爽收尾适合飞前', budget:'¥1,200-1,800', detail:'原宿站步行3分钟。柚子清香汤底不油腻，飞前最后一餐刚好。\n11点开门到第一轮，基本不排队。\n吃完11:40返回酒店取行李，12:30出发去机场。', pay:{cash:1}, gmap:'Afuri+Harajuku+Tokyo' },
+      { name:'成田机场 T1', lat:35.7720, lng:140.3880, type:'transport', time:'15:30', desc:'返程 · 酒店→成田T1，NEX 约80分钟', budget:'¥3,070（NEX）', detail:'建议13:00前从酒店出发。\n新宿→成田 NEX 成田特快约80分钟，每30分钟一班。\nT1 免税店（check-in后）：白色恋人、东京香蕉、Royce生巧。\n注意：务必确认航站楼！T1和T2/T3不互通。', pay:{cash:1,card:1,suica:1}, gmap:'Narita+Airport+Terminal+1' }
+    ]
+  }
+];
+
+let HOTEL = JSON.parse(JSON.stringify(DEFAULT_HOTEL));
+let DAYS = JSON.parse(JSON.stringify(DEFAULT_DAYS));
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  MAP ENGINE                                              ║
+// ╚══════════════════════════════════════════════════════════╝
+
+let map, markers=[], polylines=[], locMarker, locCircle;
+const emojis = { food:'🍽️', spot:'📍', drink:'🍺', hotel:'🏨', transport:'🚃' };
+const emojiLabels = { food:'餐', spot:'景', drink:'饮', hotel:'宿', transport:'行' };
+const typeColors = { food:'#ff3b30', spot:'#007aff', drink:'#af52de', hotel:'#ff9500', transport:'#aeaeb2' };
+
+function initMap() {
+  map = L.map('map', {
+    center: [HOTEL.lat||35.69, HOTEL.lng||139.74],
+    zoom: 12, zoomControl: false, attributionControl: true
+  });
+  L.control.zoom({ position:'topright' }).addTo(map);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> | 旅図 AI'
+  }).addTo(map);
+
+  // Locate control
+  const LocCtrl = L.Control.extend({
+    options: { position:'bottomright' },
+    onAdd() {
+      const b = L.DomUtil.create('button');
+      b.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>`;
+      b.title = '我的位置';
+      b.style.cssText = 'width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border:none;box-shadow:0 1px 4px rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;cursor:pointer;color:#1d1d1f;';
+      L.DomEvent.disableClickPropagation(b);
+      b.onclick = () => map.locate({ setView:true, maxZoom:15 });
+      return b;
+    }
+  });
+  new LocCtrl().addTo(map);
+
+  map.on('locationfound', e => {
+    const r = e.accuracy/2;
+    if(locMarker){ locMarker.setLatLng(e.latlng); locCircle.setLatLng(e.latlng).setRadius(r); }
+    else {
+      locMarker = L.marker(e.latlng, {
+        icon: L.divIcon({ className:'', html:'<div style="width:14px;height:14px;border-radius:50%;background:#007aff;border:2.5px solid #fff;box-shadow:0 0 6px rgba(0,122,255,.5)"></div>', iconSize:[14,14], iconAnchor:[7,7] }),
+        zIndexOffset: 2000
+      }).addTo(map);
+      locCircle = L.circle(e.latlng, { radius:r, color:'#007aff', fillColor:'#007aff', fillOpacity:.08, weight:1 }).addTo(map);
+    }
+  });
+  map.on('locationerror', ()=>{});
+
+  if(HOTEL.lat) {
+    const hIcon = L.divIcon({
+      className:'',
+      html:`<div style="width:32px;height:32px;border-radius:50%;background:#ff9500;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 3px 12px rgba(255,149,0,.35)">🏨</div>`,
+      iconSize:[32,32], iconAnchor:[16,16], popupAnchor:[0,-18]
+    });
+    L.marker([HOTEL.lat,HOTEL.lng],{icon:hIcon,zIndexOffset:1000}).addTo(map).bindPopup(`<b>${HOTEL.name}</b><br><span style="color:#86868b;font-size:12px">${HOTEL.address||''}</span>`);
+  }
+}
+
+function mkIcon(color,emoji){
+  return L.divIcon({
+    className:'',
+    html:`<div style="width:30px;height:30px;border-radius:50%;background:${color};border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.18)">${emoji||'📌'}</div>`,
+    iconSize:[30,30], iconAnchor:[15,15], popupAnchor:[0,-17]
+  });
+}
+
+function clearMap(){ markers.forEach(m=>map.removeLayer(m)); polylines.forEach(p=>map.removeLayer(p)); markers=[]; polylines=[]; }
+
+function showDay(idx){
+  clearMap();
+  if(idx===0){
+    const pts=[];
+    DAYS.slice(1).forEach(d=>{
+      d.locations.forEach(l=>{ if(l.lat) pts.push([l.lat,l.lng]); });
+      const dayLocs = d.locations.filter(l=>l.time!=='—'&&l.lat);
+      dayLocs.forEach(l=>{
+        const m = L.circleMarker([l.lat,l.lng],{radius:5,fillColor:d.color,color:'#fff',weight:2,fillOpacity:.9}).addTo(map).bindPopup(`<b>${l.name}</b><br><span style="color:#86868b;font-size:12px">${d.label} · ${d.title}</span>`);
+        markers.push(m);
+      });
+    });
+    if(pts.length) map.fitBounds(pts,{padding:[30,30]});
+    return;
+  }
+  const day=DAYS.find(d=>d.id===idx);
+  if(!day) return;
+  const coords=[];
+  day.locations.forEach(l=>{
+    if(!l.lat) return;
+    const gmapQ = l.gmap||encodeURIComponent(l.name);
+    const pop = `<b>${l.name}</b>${l.time!=='—'?'<br><span style="color:#86868b;font-size:12px">'+l.time+'</span>':''}<br>${l.desc||''}${l.budget?'<br><span style="color:#ff9500;font-size:12px">'+l.budget+'</span>':''}<br><a href="#" onclick="event.preventDefault();openAS('${l.name.replace(/'/g,"\\'")}',${l.lat},${l.lng},'${gmapQ}')">📍 导航</a>`;
+    const m = L.marker([l.lat,l.lng],{icon:mkIcon(day.color, emojis[l.type]||'📌')}).addTo(map).bindPopup(pop);
+    markers.push(m);
+    if(l.time!=='—') coords.push([l.lat,l.lng]);
+  });
+  if(coords.length>1){
+    const pl = L.polyline(coords,{color:day.color,weight:3,opacity:.45,dashArray:'8,6'}).addTo(map);
+    polylines.push(pl);
+  }
+  if(coords.length) map.fitBounds(coords,{padding:[40,40],maxZoom:14});
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  NAVIGATION HELPERS                                      ║
+// ╚══════════════════════════════════════════════════════════╝
+
+const IN_APP_WEBVIEW = (()=>{
+  const ua = (navigator.userAgent||'').toLowerCase();
+  return /micromessenger|xhs|xhsdiscover|discover\/|tiktok|aweme|weibo|qq\/|qqbrowser|alipayclient|dingtalk|lark|feishu|ucbrowser|baiduboxapp|toutiao|newsarticle/.test(ua);
+})();
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+function xhsKw(loc){
+  if(loc.xhsKeyword) return loc.xhsKeyword.trim();
+  return (loc.name||'').replace(/⭐.*$/g,'').replace(/（.*?）/g,'').replace(/\(.*?\)/g,'').replace(/\s+/g,' ').trim();
+}
+function dpKw(loc){
+  if(loc.dianpingKeyword) return loc.dianpingKeyword.trim();
+  return (loc.name||'').replace(/⭐.*$/g,'').replace(/（.*?）/g,'').replace(/\(.*?\)/g,'').replace(/\s+/g,' ').trim();
+}
+
+function xhsAppUrl(loc){ return `xhsdiscover://search/result?keyword=${encodeURIComponent(xhsKw(loc))}&target_search=notes&source=deeplink`; }
+function xhsWebUrl(loc){ return `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(xhsKw(loc))}&source=web_explore_feed`; }
+function dpAppUrl(loc){ return `dianping://searchshoplist?keyword=${encodeURIComponent(dpKw(loc))}`; }
+function dpWebUrl(loc){ return `https://m.dianping.com/searchshop?keyword=${encodeURIComponent(dpKw(loc))}`; }
+
+function openXhsLink(loc){
+  window.open(xhsWebUrl(loc), '_blank');
+}
+function openDpLink(loc){
+  window.open(dpWebUrl(loc), '_blank');
+}
+
+function openAS(name,lat,lng,gmap){
+  const q = gmap||encodeURIComponent(name);
+  const enc=encodeURIComponent(name);
+  const safe=name.replace(/'/g,"\\'");
+  const appleUrl = IN_APP_WEBVIEW
+    ? `https://maps.apple.com/?q=${lat},${lng}&ll=${lat},${lng}&name=${enc}`
+    : `maps://maps.apple.com/?q=${lat},${lng}&name=${enc}`;
+  const googleUrl=`https://www.google.com/maps/search/?api=1&query=${q}`;
+  const amapScheme = IS_IOS ? 'iosamap' : 'androidamap';
+  const amapApp = `${amapScheme}://viewMap?sourceApplication=trip&poiname=${enc}&lat=${lat}&lon=${lng}&dev=0`;
+  const amapWeb = `https://uri.amap.com/marker?position=${lng},${lat}&name=${enc}&src=trip&coordinate=wgs84&callnative=1`;
+  document.getElementById('asOpts').innerHTML =
+    `<button class="as-item" onclick="window.open('${appleUrl}');closeAS()">🍎 Apple Maps</button>`+
+    `<button class="as-item" onclick="window.open('${googleUrl}');closeAS()">🗺️ Google Maps</button>`+
+    `<button class="as-item" onclick="${IN_APP_WEBVIEW?`window.open('${amapWeb}')`:`window.location.href='${amapApp}'`};closeAS()">🧭 高德地图</button>`;
+  document.getElementById('asOverlay').classList.add('show');
+}
+function closeAS(){ document.getElementById('asOverlay').classList.remove('show'); }
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  UI RENDER                                               ║
+// ╚══════════════════════════════════════════════════════════╝
+
+function payChips(pay){
+  if(!pay) return '';
+  let h='<div class="flex gap-1 flex-wrap mt-1.5">';
+  const m={cash:'💴 现金',card:'💳 卡',suica:'Suica',paypay:'PayPay',alipay:'支付宝',wechat:'微信'};
+  for(const [k,label] of Object.entries(m)){
+    if(pay[k]!==undefined){
+      const cls=pay[k]===1?'bg-green-50 text-green-600':'bg-orange-50 text-orange-500';
+      const dot=pay[k]===1?'🟢':'🟠';
+      h+=`<span class="pay-chip ${cls}">${dot} ${label}</span>`;
+    }
+  }
+  return h+'</div>';
+}
+
+function locCard(loc,dayIdx,dayColor){
+  const dot=loc.type;
+  const uid=`d${dayIdx}-${loc.name.replace(/\W/g,'')}`;
+  const gmapQ=loc.gmap||encodeURIComponent(loc.name);
+  const safeName=loc.name.replace(/'/g,"\\'");
+
+  // Build action buttons
+  let btns='';
+  btns+=`<button class="btn-sm bg-[#0071e3] text-white" onclick="event.stopPropagation();openAS('${safeName}',${loc.lat},${loc.lng},'${gmapQ}')">📍 导航</button>`;
+
+  // 小红书 button — compute URL once, embed directly
+  const hasXhs = loc.xhs || loc.xhsKeyword;
+  if(hasXhs){
+    const xu = xhsWebUrl(loc);
+    btns+=`<button class="btn-sm bg-[#ff2442] text-white" onclick="event.stopPropagation();window.open('${xu.replace(/'/g,"\\'")}','_blank')">📕 小红书</button>`;
+  }
+
+  // 大众点评 button
+  const dpOn = loc.dianping !== false && (loc.dianping || loc.dianpingKeyword || loc.type==='food' || loc.type==='drink');
+  if(dpOn){
+    const du = dpWebUrl(loc);
+    btns+=`<button class="btn-sm bg-[#ffa700] text-white" onclick="event.stopPropagation();window.open('${du.replace(/'/g,"\\'")}','_blank')">🍜 大众点评</button>`;
+  }
+
+  // Reservation button
+  if(loc.reserve){
+    btns+=`<a href="${loc.reserve}" target="_blank" class="btn-sm bg-[#34c759] text-white" onclick="event.stopPropagation()">📅 预约</a>`;
+  }
+
+  const isAlt = loc.time==='—';
+  const dotColor = typeColors[loc.type]||'#aeaeb2';
+  const badgeLabel = emojiLabels[loc.type]||'📍';
+
+  return `
+  <div class="tl-item relative mb-2.5">
+    <div class="tl-dot" style="background:${dotColor}"></div>
+    <div class="poi-card bg-white rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,.06)]" onclick="if(!event.target.closest('button,a'))toggleDetail('${uid}')">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-semibold tracking-wider ${isAlt?'text-gray-400':'text-gray-400'}">${isAlt?'备选':loc.time}</span>
+        <span class="badge-sm bg-opacity-10" style="background:${dotColor}15;color:${dotColor}">${emojis[loc.type]||'📌'} ${badgeLabel}</span>
+      </div>
+      <div class="text-[17px] font-semibold mt-1 tracking-[-0.01em]">${loc.name}</div>
+      <div class="text-[14px] text-gray-500 mt-0.5 leading-relaxed">${loc.desc}</div>
+      ${loc.budget?`<div class="inline-block mt-2 px-2.5 py-1 bg-gray-100 rounded-lg text-xs text-gray-500 font-medium">${loc.budget}</div>`:''}
+      ${payChips(loc.pay)}
+      <div class="flex gap-2 mt-3 flex-wrap">${btns}</div>
+      ${loc.detail?`<div class="detail-block hidden" id="${uid}">${loc.detail.replace(/\n/g,'<br>')}</div>`:''}
+    </div>
+  </div>`;
+}
+
+function toggleDetail(id){
+  const el=document.getElementById(id);
+  if(el) el.classList.toggle('hidden');
+}
+
+function renderDay(idx){
+  const d=DAYS.find(x=>x.id===idx);
+  if(!d) return '';
+  const main=d.locations.filter(l=>l.time!=='—');
+  const alt=d.locations.filter(l=>l.time==='—');
+
+  let h='';
+  // Weather alert
+  if(d.weatherNote){
+    h+=`<div class="weather-alert rounded-xl px-4 py-3 mb-4 text-sm flex items-start gap-2.5">
+      <span class="text-base flex-shrink-0">🌤️</span>
+      <div><span class="font-semibold text-gray-800">天气提醒</span><br><span class="text-gray-500 text-xs">${d.weatherNote}</span></div>
+    </div>`;
+  }
+
+  // Region tag
+  if(d.region){
+    h+=`<div class="flex items-center gap-2 mb-4">
+      <span class="px-3 py-1.5 rounded-full text-xs font-semibold text-white" style="background:${d.color}">${d.region}</span>
+      <span class="text-xs text-gray-400">今日主区域，地铁换乘少，路线顺滑</span>
+    </div>`;
+  }
+
+  h+=`<div class="mb-4"><h2 class="text-[22px] font-bold tracking-[-0.02em]">${d.title}</h2><p class="text-[15px] text-gray-500 mt-0.5">${d.date}</p></div>`;
+
+  if(main.length){
+    h+=`<div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">行程</div><div class="timeline">`;
+    main.forEach(l=>h+=locCard(l,idx,d.color));
+    h+='</div>';
+  }
+  if(alt.length){
+    h+=`<div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mt-6 mb-3">备选</div><div class="timeline">`;
+    alt.forEach(l=>h+=locCard(l,idx,d.color));
+    h+='</div>';
+  }
+  return h;
+}
+
+function overviewContent(){
+  const tripDays = DAYS.slice(1);
+  if(!tripDays.length) return '<div class="text-center py-16 text-gray-400">暂无行程数据</div>';
+
+  let dayCards='';
+  tripDays.forEach(d=>{
+    const spots=d.locations.filter(l=>l.time!=='—').length;
+    dayCards+=`
+    <div class="poi-card bg-white rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,.06)] mb-2 cursor-pointer" onclick="go(${d.id})">
+      <div class="flex items-center gap-3">
+        <div class="w-2 h-2 rounded-full flex-shrink-0" style="background:${d.color}"></div>
+        <div class="flex-1 min-w-0">
+          <div class="text-[16px] font-semibold tracking-[-0.01em] truncate">${d.label} · ${d.title}</div>
+          <div class="text-[13px] text-gray-500 mt-0.5">${d.date} · ${d.region} · ${spots}个点</div>
+        </div>
+        <svg class="w-4 h-4 text-gray-300 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+    </div>`;
+  });
+
+  // Region summary
+  const regions = [...new Set(tripDays.map(d=>d.region).filter(Boolean))];
+  const regionLine = regions.length ? regions.join(' → ') : '';
+
+  // Reservation count
+  const resvList=[];
+  tripDays.forEach(d=>d.locations.forEach(l=>{if(l.reserve) resvList.push(l.name);}));
+
+  // Cash-only payment warning
+  let payWarn='';
+  const cashOnly=[];
+  tripDays.forEach(d=>d.locations.forEach(l=>{
+    if(l.pay&&l.pay.cash===1&&!l.pay.card&&!l.pay.suica) cashOnly.push(l.name);
+  }));
+  if(cashOnly.length){
+    payWarn=`<div class="bg-white rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,.06)] mb-2">
+      <h4 class="text-sm font-bold mb-1.5">⚠️ 现金提醒</h4>
+      <p class="text-[13px] text-gray-500 leading-relaxed">以下店铺只收现金：<br><span class="text-red-500 font-medium">${cashOnly.join('、')}</span></p>
+    </div>`;
+  }
+
+  // Has transport type items?
+  const hasTransport = tripDays.some(d=>d.locations.some(l=>l.type==='transport'));
+
+  return `
+  <div class="text-center py-7">
+    <h1 class="text-[28px] font-bold tracking-[-0.025em] leading-tight">${tripDays.length}日行程</h1>
+    <p class="text-[17px] text-gray-500 mt-1.5">${regionLine||'每日一区，路线顺滑'}</p>
+  </div>
+
+  <div class="grid grid-cols-2 gap-2.5 mb-5">
+    <div class="bg-white rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,.06)]">
+      <div class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">酒店</div>
+      <div class="text-[14px] font-semibold leading-snug">${HOTEL.name}</div>
+      <div class="text-[11px] text-gray-400 mt-1">${HOTEL.desc||''}</div>
+    </div>
+    <div class="bg-white rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,.06)]">
+      <div class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">天数 & 区域</div>
+      <div class="text-[18px] font-bold">${tripDays.length}天</div>
+      <div class="text-[11px] text-gray-400 mt-1">${regions.length}个主区域</div>
+    </div>
+    <div class="bg-white rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,.06)]">
+      <div class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">预约提醒</div>
+      <div class="text-[14px] font-semibold ${resvList.length?'text-orange-500':''}">${resvList.length?resvList.length+'项需预约':'无预约项'}</div>
+      <div class="text-[11px] text-gray-400 mt-1">${resvList.length?resvList.slice(0,3).join('、')+(resvList.length>3?'…':''):'—'}</div>
+    </div>
+    <div class="bg-white rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,.06)]">
+      <div class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">POI 统计</div>
+      <div class="text-[18px] font-bold">${tripDays.reduce((s,d)=>s+d.locations.filter(l=>l.time!=='—').length,0)}个点</div>
+      <div class="text-[11px] text-gray-400 mt-1">${tripDays.reduce((s,d)=>s+d.locations.filter(l=>l.time==='—').length,0)}个备选</div>
+    </div>
+  </div>
+
+  ${payWarn}
+
+  <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mt-5 mb-2">行程概览</div>
+  ${dayCards}
+
+  <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mt-6 mb-2">图例</div>
+  <div class="flex gap-4 flex-wrap text-xs text-gray-500">
+    <span>🍽️ 餐厅</span><span>📍 景点</span><span>🍺 饮品</span><span>🏨 酒店</span>${hasTransport?'<span>🚃 交通</span>':''}
+  </div>
+  <div class="text-[11px] text-gray-400 mt-4 text-center">旅図 AI · 行程是参考坐标，不是执行脚本</div>`;
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  TAB NAVIGATION                                          ║
+// ╚══════════════════════════════════════════════════════════╝
+
+let cur=0;
+const tabsContainer=document.getElementById('tabsContainer');
+const contentArea=document.getElementById('contentArea');
+
+function buildTabs(){
+  tabsContainer.innerHTML='';
+  DAYS.forEach(d=>{
+    const btn=document.createElement('button');
+    btn.className='tab-btn flex-shrink-0 px-4 py-2 rounded-full text-[13px] font-medium transition-all duration-200 whitespace-nowrap';
+    btn.dataset.day=d.id;
+    btn.textContent=d.label;
+    btn.onclick=()=>go(+d.id);
+    tabsContainer.appendChild(btn);
+  });
+}
+
+function go(idx){
+  cur=idx;
+  document.querySelectorAll('.tab-btn').forEach(b=>{
+    const id=+b.dataset.day;
+    if(id===idx){ b.className='tab-btn flex-shrink-0 px-4 py-2 rounded-full text-[13px] font-medium bg-[#0071e3] text-white transition-all duration-200 whitespace-nowrap'; }
+    else { b.className='tab-btn flex-shrink-0 px-4 py-2 rounded-full text-[13px] font-medium bg-gray-200/70 text-gray-500 transition-all duration-200 whitespace-nowrap'; }
+  });
+  contentArea.innerHTML = idx===0 ? overviewContent() : renderDay(idx);
+  showDay(idx);
+  contentArea.scrollTo({top:0,behavior:'smooth'});
+  const tb=document.querySelector(`[data-day="${idx}"]`);
+  if(tb) tb.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  WIZARD & SETTINGS                                       ║
+// ╚══════════════════════════════════════════════════════════╝
+
+let wizardStep=1;
+let wizardData={ pace:'', tags:[], budget:'', dest:'', start:'', end:'', hotel:'' };
+
+function openWizard(){
+  document.getElementById('wizardModal').classList.add('show');
+  // Load saved API key
+  const savedKey=localStorage.getItem('trip_apikey')||'';
+  document.getElementById('wiz-apikey').value=savedKey;
+  wizardStep=1; showWizStep(1);
+}
+function closeWizard(){ document.getElementById('wizardModal').classList.remove('show'); }
+
+function showWizStep(n){
+  wizardStep=n;
+  document.querySelectorAll('.wizard-step').forEach(el=>el.classList.remove('active'));
+  const target=document.getElementById('wiz-step-'+n);
+  if(target) target.classList.add('active');
+}
+
+function wizardNext(n){ showWizStep(n); }
+
+// Preference buttons
+document.addEventListener('click',e=>{
+  if(e.target.classList.contains('pref-btn')){
+    document.querySelectorAll('.pref-btn').forEach(b=>b.classList.remove('bg-blue-50','border-blue-400','text-blue-600'));
+    e.target.classList.add('bg-blue-50','border-blue-400','text-blue-600');
+    wizardData.pace=e.target.dataset.val;
+  }
+  if(e.target.classList.contains('tag-btn')){
+    const v=e.target.dataset.val;
+    if(wizardData.tags.includes(v)){
+      wizardData.tags=wizardData.tags.filter(t=>t!==v);
+      e.target.classList.remove('bg-blue-50','border-blue-400','text-blue-600');
+    } else {
+      wizardData.tags.push(v);
+      e.target.classList.add('bg-blue-50','border-blue-400','text-blue-600');
+    }
+  }
+});
+
+function openSettings(){
+  document.getElementById('settings-apikey').value=localStorage.getItem('trip_apikey')||'';
+  document.getElementById('settings-model').value=localStorage.getItem('trip_model')||'deepseek-v4-pro';
+  document.getElementById('settingsModal').classList.add('show');
+}
+function closeSettings(){ document.getElementById('settingsModal').classList.remove('show'); }
+
+function saveSettings(){
+  localStorage.setItem('trip_apikey',document.getElementById('settings-apikey').value.trim());
+  localStorage.setItem('trip_model',document.getElementById('settings-model').value);
+  closeSettings();
+  alert('设置已保存 ✓');
+}
+
+function resetTrip(){
+  if(confirm('确定恢复默认示例行程？当前数据将被覆盖。')){
+    HOTEL=JSON.parse(JSON.stringify(DEFAULT_HOTEL));
+    DAYS=JSON.parse(JSON.stringify(DEFAULT_DAYS));
+    localStorage.removeItem('trip_data');
+    buildTabs(); go(0);
+    closeSettings();
+  }
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  AI PLANNING                                             ║
+// ╚══════════════════════════════════════════════════════════╝
+
+async function runAIPlan(){
+  const apiKey=document.getElementById('wiz-apikey').value.trim()||localStorage.getItem('trip_apikey')||'';
+  wizardData.dest=document.getElementById('wiz-dest').value.trim();
+  wizardData.start=document.getElementById('wiz-start').value;
+  wizardData.end=document.getElementById('wiz-end').value;
+  wizardData.hotel=document.getElementById('wiz-hotel').value.trim();
+  wizardData.budget=document.getElementById('wiz-budget').value;
+  wizardData.wishlist=document.getElementById('wiz-wishlist').value.trim();
+  // Flight info
+  wizardData.flightInNo=document.getElementById('wiz-flight-in-no').value.trim();
+  wizardData.flightInTime=document.getElementById('wiz-flight-in-time').value;
+  wizardData.flightInAirport=document.getElementById('wiz-flight-in-airport').value.trim();
+  wizardData.flightOutNo=document.getElementById('wiz-flight-out-no').value.trim();
+  wizardData.flightOutTime=document.getElementById('wiz-flight-out-time').value;
+  wizardData.flightOutAirport=document.getElementById('wiz-flight-out-airport').value.trim();
+
+  if(!wizardData.dest){
+    alert('请至少填写目的地');
+    wizardNext(1);
+    return;
+  }
+
+  // Save API key
+  if(apiKey) localStorage.setItem('trip_apikey',apiKey);
+
+  showWizStep('loading');
+  document.getElementById('wiz-loading-text').textContent='AI 正在规划你的行程…';
+
+  // If no API key, load demo data with a simulated delay
+  if(!apiKey){
+    await new Promise(r=>setTimeout(r,1500));
+    HOTEL=JSON.parse(JSON.stringify(DEFAULT_HOTEL));
+    DAYS=JSON.parse(JSON.stringify(DEFAULT_DAYS));
+    document.getElementById('wiz-loading-text').textContent='已加载示例行程（配置 API Key 可使用真 AI 规划）';
+    await new Promise(r=>setTimeout(r,800));
+    closeWizard();
+    buildTabs(); go(0);
+    return;
+  }
+
+  // Call DeepSeek API
+  try {
+    document.getElementById('wiz-loading-text').textContent='AI 正在分析目的地和区域…';
+    const model=localStorage.getItem('trip_model')||'deepseek-v4-pro';
+
+    const daysCount = (wizardData.start && wizardData.end)
+      ? Math.max(1, Math.round((new Date(wizardData.end)-new Date(wizardData.start))/(1000*60*60*24))+1)
+      : 4;
+
+    const systemPrompt = `你是一个专业的旅行规划师。你需要根据用户提供的出行信息，生成一份结构化的多日行程。
+
+【重要原则：只使用用户提供的信息】
+- 用户没给的，一律不编造：
+  - 用户提供了航班信息（航班号、机场、时间） → 第一天加入到达交通，最后一天加入返程交通，type:"transport"
+  - 用户没提供航班 → 不要在任何地方提到航班、机场、航站楼、接机、送机
+  - 用户没提供具体酒店名和地址 → hotel name 填 "待定"，lat/lng 填 0，address 填 ""，desc 填 "用户未提供"
+- 不要擅自添加用户没提到的步骤
+
+输出必须是严格的 JSON 格式，包含两个对象：
+
+1. HOTEL: { name, lat, lng, address, desc }
+   - 用户提供了就如实填写；没提供就 name:"待定", lat:0, lng:0, address:"", desc:"用户未提供"
+2. DAYS: 数组，第一个元素是 { id:0, label:"总览", color:"#0071e3", locations:[] }
+   然后每天一个元素: {
+     id: 数字(从1开始),
+     label: "D1"/"D2"等,
+     date: "日期+星期",
+     title: "日标题（不要包含航班/机场字样，除非用户提供了）",
+     color: 颜色hex(每天不同：橙/红/蓝/绿/紫循环),
+     region: "当天主区域",
+     weatherNote: "根据季节和当地气候的合理提醒，不要编造极端天气",
+     locations: [
+       {
+         name: "地点名",
+         lat: 精确纬度,
+         lng: 精确经度,
+         type: "food"|"spot"|"drink"|"hotel"|"transport"（只在用户提供了交通信息时才用transport）,
+         time: "HH:MM" 或 "—"(备选),
+         desc: "简短描述",
+         budget: "合理费用范围",
+         detail: "详细信息，用\\n换行",
+         pay: { cash: 1或0.5, card: 1或0.5, suica: 1或0.5 },
+         xhsKeyword: "小红书搜索词",
+         dianpingKeyword: "大众点评搜索词",
+         reserve: "预约链接（没有就省略此字段）",
+         gmap: "Google Maps英文搜索词"
+       }
+     ]
+   }
+
+规划原则：
+- 一天一个主区域，路线顺畅
+- 第一天轻松，最后一天也不排太满
+- 每天最多1个需要预约的点
+- 餐厅优先选当天区域顺路的，结合大众点评口碑+小红书真实体验来描述
+- 每天配2-3个餐厅/饮品候选
+- 户外景点标记天气影响
+- 经纬度务必准确，Google Maps 可查的坐标
+- 总共${daysCount}天
+- 所有文字用中文`;
+
+    // Build flight info section
+    const hasFlightIn = wizardData.flightInAirport || wizardData.flightInNo || wizardData.flightInTime;
+    const hasFlightOut = wizardData.flightOutAirport || wizardData.flightOutNo || wizardData.flightOutTime;
+    let flightSection = '';
+    if(hasFlightIn || hasFlightOut){
+      flightSection = '【航班信息】\n';
+      if(hasFlightIn){
+        flightSection += `到达: ${wizardData.flightInNo||'?'} ${wizardData.flightInTime||'?'} → ${wizardData.flightInAirport||'?'}\n`;
+        flightSection += `请在 Day 1 加入从${wizardData.flightInAirport||'机场'}到酒店的交通（type:"transport"），并据此安排第一天的开始时间\n`;
+      }
+      if(hasFlightOut){
+        flightSection += `返程: ${wizardData.flightOutNo||'?'} ${wizardData.flightOutTime||'?'} ← ${wizardData.flightOutAirport||'?'}\n`;
+        flightSection += `请在最后一天加入从酒店到${wizardData.flightOutAirport||'机场'}的交通（type:"transport"），最后一天在起飞前3小时结束游览\n`;
+      }
+    }
+
+    const userMsg = `请为我规划${wizardData.dest}${daysCount}日游行程。
+
+【已知信息】
+${wizardData.start?'出发日期: '+wizardData.start:'出发日期: 未提供'}
+${wizardData.end?'回程日期: '+wizardData.end:'回程日期: 未提供'}
+${wizardData.hotel?'酒店: '+wizardData.hotel:'酒店: 未提供 —— 不要编造酒店名和地址，HOTEL填"待定"'}
+${flightSection}
+${wizardData.pace?'节奏: '+wizardData.pace:''}
+${wizardData.tags.length?'偏好: '+wizardData.tags.join('、'):''}
+${wizardData.budget?'餐饮预算: '+wizardData.budget:''}
+${wizardData.wishlist?'想去: '+wizardData.wishlist:'想去: 未提供（请推荐当地最值得去的地方）'}
+
+【严禁编造】
+- 用户提供了航班才加入机场交通，没提供就绝对不要提机场/航班/送机/接机
+- 没提供酒店 → 酒店字段全填"待定"或0
+- 不要出现 type:"transport" 除非上面【航班信息】里确实给了航班数据
+
+请直接输出JSON，不要有其他文字。`;
+
+    document.getElementById('wiz-loading-text').textContent='正在编排每日行程…';
+
+    const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':'Bearer '+apiKey
+      },
+      body:JSON.stringify({
+        model:model,
+        max_tokens:8192,
+        messages:[
+          {role:'system',content:systemPrompt},
+          {role:'user',content:userMsg}
+        ]
+      })
+    });
+
+    if(!resp.ok){
+      const err=await resp.json().catch(()=>({}));
+      throw new Error(err.error?.message||`API 错误 ${resp.status}`);
+    }
+
+    document.getElementById('wiz-loading-text').textContent='正在生成地图…';
+
+    const data=await resp.json();
+    const text=data.choices?.[0]?.message?.content||'';
+    // Extract JSON from response (handle markdown code blocks)
+    const jsonMatch=text.match(/```(?:json)?\s*([\s\S]*?)```/)||text.match(/(\{[\s\S]*\})/);
+    const jsonStr=jsonMatch?jsonMatch[1]:text;
+    const parsed=JSON.parse(jsonStr);
+
+    if(parsed.HOTEL) HOTEL=parsed.HOTEL;
+    if(parsed.DAYS) DAYS=parsed.DAYS;
+
+    // Save to localStorage
+    try{ localStorage.setItem('trip_data',JSON.stringify({HOTEL,DAYS})); }catch(e){}
+
+    closeWizard();
+    buildTabs(); go(0);
+
+  } catch(e){
+    console.error('AI planning error:',e);
+    document.getElementById('wiz-loading-text').textContent='规划失败: '+e.message+' — 将加载示例行程';
+    await new Promise(r=>setTimeout(r,1500));
+    HOTEL=JSON.parse(JSON.stringify(DEFAULT_HOTEL));
+    DAYS=JSON.parse(JSON.stringify(DEFAULT_DAYS));
+    closeWizard();
+    buildTabs(); go(0);
+  }
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  INIT                                                     ║
+// ╚══════════════════════════════════════════════════════════╝
+
+// Load saved trip data if available
+(function(){
+  try{
+    const saved=localStorage.getItem('trip_data');
+    if(saved){
+      const d=JSON.parse(saved);
+      if(d.HOTEL) HOTEL=d.HOTEL;
+      if(d.DAYS) DAYS=d.DAYS;
+    }
+  }catch(e){}
+})();
+
+// Action sheet overlay close on backdrop click
+document.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('asOverlay').addEventListener('click',e=>{
+    if(e.target===document.getElementById('asOverlay')) closeAS();
+  });
+  // Modal backdrop close
+  document.getElementById('wizardModal').addEventListener('click',e=>{
+    if(e.target===document.getElementById('wizardModal')) closeWizard();
+  });
+  document.getElementById('settingsModal').addEventListener('click',e=>{
+    if(e.target===document.getElementById('settingsModal')) closeSettings();
+  });
+});
+
+initMap();
+buildTabs();
+go(0);
+</script>
+</body>
+</html>
